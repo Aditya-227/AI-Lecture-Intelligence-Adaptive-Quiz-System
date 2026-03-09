@@ -322,16 +322,16 @@ ffmpeg
 
 # Screenshots
 
-You can add application screenshots here.
+![Main](screenshots/1.png)
 
-Example:
+![Front1](screenshots/2.png)
 
-```
-screenshots/
-   ├── upload.png
-   ├── transcript.png
-   ├── quiz.png
-```
+![Front2](screenshots/3.png)
+
+![Front3](screenshots/4.png)
+
+![Front4](screenshots/5.png)
+
 
 ---
 

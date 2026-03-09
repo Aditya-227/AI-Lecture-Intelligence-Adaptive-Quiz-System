@@ -1,0 +1,8 @@
+streamlit
+openai-whisper
+keybert
+sentence-transformers
+numpy
+pandas
+scikit-learn
+plotly

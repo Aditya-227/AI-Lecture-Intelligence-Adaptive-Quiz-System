@@ -268,7 +268,7 @@ if audio_file is not None:
 
     # Render tab buttons
     def set_tab(i):
-    st.session_state.active_tab = i
+        st.session_state.active_tab = i
     
     cols = st.columns(len(TAB_LABELS))
     for i, label in enumerate(TAB_LABELS):

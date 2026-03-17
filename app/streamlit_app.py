@@ -332,65 +332,52 @@ if audio_file is not None:
 
     # ─────────────── TAB 4 : QUIZ ────────────────────────
 
-    with tab4:
+    # ─────────────── TAB 4 : QUIZ ────────────────────────
 
-        # --- FORCE TAB PERSISTENCE ---
-        st.session_state.setdefault("active_tab", "quiz")
+    with tab4:
     
-        # --- INIT ANSWERS ---
-        if "user_answers" not in st.session_state or len(st.session_state.user_answers) != len(mcqs):
-            st.session_state.user_answers = [None] * len(mcqs)
-    
-        # ───────── START SCREEN ─────────
         if not st.session_state.start_quiz:
     
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
+            st.button("▶️ Start Quiz", on_click=start_quiz_callback)
     
-            if st.button("▶️ Start Quiz"):
-                st.session_state.start_quiz = True
-                st.session_state.quiz_submitted = False
-                st.session_state.active_tab = "quiz"
-                st.rerun()
-    
-        # ───────── QUIZ FORM ─────────
         elif not st.session_state.quiz_submitted:
     
-            with st.form("quiz_form"):
+            user_answers = []
     
+            with st.form("quiz_form"):
                 for i, q in enumerate(mcqs):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
     
-                    selected = st.radio(
+                    # ✅ FIX: removed index=None
+                    choice = st.radio(
                         "Choose your answer:",
                         q["options"],
-                        key=f"quiz_{i}",
-                        index=0 if st.session_state.user_answers[i] is None else q["options"].index(st.session_state.user_answers[i])
+                        key=f"quiz_{i}"
                     )
     
-                    st.session_state.user_answers[i] = selected
+                    user_answers.append(choice)
                     st.divider()
     
                 submitted = st.form_submit_button("✅ Submit Quiz")
     
             if submitted:
-                # VALIDATION (fix multiple clicks issue)
-                if None in st.session_state.user_answers:
-                    st.warning("⚠️ Answer all questions before submitting.")
+                # ✅ VALIDATION FIX (prevents multiple clicks issue)
+                if None in user_answers:
+                    st.warning("⚠️ Please answer all questions.")
                 else:
+                    st.session_state.user_answers   = user_answers
                     st.session_state.quiz_submitted = True
-                    st.session_state.active_tab = "quiz"
-                    st.rerun()
     
-        # ───────── RESULTS ─────────
         else:
     
-            user_answers = st.session_state.user_answers
+            user_answers = st.session_state.get("user_answers", [])
             score        = 0
             wrong_topics = []
             result_data  = []
     
             for i, q in enumerate(mcqs):
-                given   = user_answers[i]
+                given   = user_answers[i] if i < len(user_answers) else None
                 correct = given == q["answer"]
     
                 if correct:
@@ -403,7 +390,7 @@ if audio_file is not None:
                 result_data.append({
                     "Question":       f"Q{i+1}",
                     "Status":         "✅ Correct" if correct else "❌ Wrong",
-                    "Your Answer":    given,
+                    "Your Answer":    given or "—",
                     "Correct Answer": q["answer"]
                 })
     
@@ -434,13 +421,7 @@ if audio_file is not None:
             else:
                 st.success("🎉 Great job!")
     
-            if st.button("🔄 Retake Quiz"):
-                st.session_state.start_quiz = False
-                st.session_state.quiz_submitted = False
-                st.session_state.user_answers = [None] * len(mcqs)
-                st.session_state.active_tab = "quiz"
-                st.rerun()
-
+            st.button("🔄 Retake Quiz", on_click=retake_quiz_callback)
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
 
     with tab5:

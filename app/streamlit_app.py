@@ -317,7 +317,6 @@ if audio_file is not None:
             if st.button("▶️ Start Quiz"):
                 st.session_state.start_quiz    = True
                 st.session_state.quiz_submitted = False
-                st.rerun()
 
         else:
             if not st.session_state.quiz_submitted:
@@ -340,7 +339,6 @@ if audio_file is not None:
                 if submitted:
                     st.session_state.user_answers  = user_answers
                     st.session_state.quiz_submitted = True
-                    st.rerun()
 
             else:
                 user_answers = st.session_state.get("user_answers", [])
@@ -427,7 +425,6 @@ if audio_file is not None:
                 if st.button("🔄 Retake Quiz"):
                     st.session_state.start_quiz    = False
                     st.session_state.quiz_submitted = False
-                    st.rerun()
 
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
 

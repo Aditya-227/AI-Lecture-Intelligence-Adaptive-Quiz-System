@@ -2,7 +2,6 @@ import os
 os.environ["PATH"] += os.pathsep + r"C:\ffmpeg\bin"
 
 import streamlit as st
-import streamlit.components.v1 as components
 import whisper
 from keybert import KeyBERT
 from sentence_transformers import SentenceTransformer
@@ -130,70 +129,29 @@ for key, default in {
     "start_quiz":      False,
     "quiz_submitted":  False,
     "user_answers":    [],
-    "active_tab":      0,          # ← NEW: tracks which tab should be visible
+    "active_tab":      0,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
 # ─────────────────────────────────────────────
-#  QUIZ BUTTON CALLBACKS
+#  CALLBACKS
 # ─────────────────────────────────────────────
+
+def set_tab(i):
+    st.session_state.active_tab = i
 
 def start_quiz_callback():
-    st.session_state.start_quiz     = True
-    st.session_state.quiz_submitted  = False
-    st.session_state.active_tab      = 3   # ← stay on Quiz tab (0-indexed)
+    st.session_state.start_quiz    = True
+    st.session_state.quiz_submitted = False
+    st.session_state.active_tab    = 3
 
 def retake_quiz_callback():
-    st.session_state.start_quiz     = False
-    st.session_state.quiz_submitted  = False
-    st.session_state.user_answers    = []
-    st.session_state.active_tab      = 3   # ← stay on Quiz tab
+    st.session_state.start_quiz    = False
+    st.session_state.quiz_submitted = False
+    st.session_state.user_answers  = []
+    st.session_state.active_tab    = 3
 
-# ─────────────────────────────────────────────
-#  TAB PERSISTENCE HELPER
-#  Injects a tiny JS snippet that re-clicks the
-#  correct tab after every Streamlit rerun.
-#  height=0 keeps it invisible.
-# ─────────────────────────────────────────────
-
-def keep_active_tab(tab_index: int):
-    components.html(
-        f"""
-        <script>
-        (function() {{
-            var TARGET = {tab_index};
-
-            function clickTab() {{
-                var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
-                if (tabs.length > TARGET) {{
-                    tabs[TARGET].click();
-                    return true;
-                }}
-                return false;
-            }}
-
-            // Try immediately (handles already-rendered tab bar)
-            if (clickTab()) return;
-
-            // Otherwise watch for the tab bar to appear in the DOM
-            var observer = new MutationObserver(function(_, obs) {{
-                if (clickTab()) {{
-                    obs.disconnect();
-                }}
-            }});
-            observer.observe(window.parent.document.body, {{
-                childList: true,
-                subtree: true
-            }});
-
-            // Safety net — disconnect after 3 s to avoid memory leak
-            setTimeout(function() {{ observer.disconnect(); }}, 3000);
-        }})();
-        </script>
-        """,
-        height=0,
-    )
 # ─────────────────────────────────────────────
 #  FILE UPLOAD
 # ─────────────────────────────────────────────
@@ -227,12 +185,11 @@ if audio_file is not None:
         with st.spinner("❓ Generating quiz questions…"):
             st.session_state.mcqs = generate_mcqs(st.session_state.transcript)
 
-        # Reset quiz + tab state for new file
-        st.session_state.start_quiz      = False
-        st.session_state.quiz_submitted   = False
-        st.session_state.user_answers     = []
-        st.session_state.processed_file   = audio_file.name
-        st.session_state.active_tab       = 0   # back to Transcript on new upload
+        st.session_state.start_quiz    = False
+        st.session_state.quiz_submitted = False
+        st.session_state.user_answers  = []
+        st.session_state.processed_file = audio_file.name
+        st.session_state.active_tab    = 0
 
         st.success("🎉 Processing complete!")
 
@@ -243,7 +200,7 @@ if audio_file is not None:
     topic_scores = [round(s * 100, 1) for w, s in topic_pairs]
     mcqs         = st.session_state.mcqs
 
-    # ── Lecture Stats Metric Cards ──────────────────────────
+    # ── Lecture Stats ──────────────────────────────────────
     word_count     = len(transcript.split())
     sentences      = [s for s in re.split(r'(?<=[.!?]) +', transcript) if s.strip()]
     sentence_count = len(sentences)
@@ -258,18 +215,11 @@ if audio_file is not None:
     st.divider()
 
     # ─────────────────────────────────────────────
-    #  TABS
-    # ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
-    #  CUSTOM TAB BAR  (no JS, no flicker)
+    #  CUSTOM TAB BAR
     # ─────────────────────────────────────────────
 
     TAB_LABELS = ["📄 Transcript", "📝 Summary", "🔍 Topics", "❓ Quiz", "📊 Analytics"]
 
-    # Render tab buttons
-    def set_tab(i):
-        st.session_state.active_tab = i
-    
     cols = st.columns(len(TAB_LABELS))
     for i, label in enumerate(TAB_LABELS):
         cols[i].button(
@@ -286,6 +236,7 @@ if audio_file is not None:
 
     # ─────────────── TAB 1 : TRANSCRIPT ──────────────────
     if active == 0:
+
         st.subheader("Full Lecture Transcript")
         with st.expander("Show full transcript", expanded=False):
             st.write(transcript)
@@ -318,6 +269,7 @@ if audio_file is not None:
 
     # ─────────────── TAB 2 : SUMMARY ─────────────────────
     elif active == 1:
+
         st.subheader("📋 Lecture Summary")
         if summary.strip():
             st.info(summary)
@@ -331,6 +283,7 @@ if audio_file is not None:
 
     # ─────────────── TAB 3 : TOPICS ──────────────────────
     elif active == 2:
+
         st.subheader("🔑 Detected Lecture Topics")
 
         if topic_words:
@@ -375,6 +328,7 @@ if audio_file is not None:
 
     # ─────────────── TAB 4 : QUIZ ────────────────────────
     elif active == 3:
+
         if not st.session_state.start_quiz:
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
             st.button("▶️ Start Quiz", on_click=start_quiz_callback)
@@ -479,6 +433,7 @@ if audio_file is not None:
 
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
     elif active == 4:
+
         st.subheader("📊 Learning Progress Analytics")
 
         file = "outputs/results.json"

@@ -2,6 +2,7 @@ import os
 os.environ["PATH"] += os.pathsep + r"C:\ffmpeg\bin"
 
 import streamlit as st
+import streamlit.components.v1 as components
 import whisper
 from keybert import KeyBERT
 from sentence_transformers import SentenceTransformer
@@ -34,11 +35,11 @@ st.caption("Upload a lecture audio file to get transcription, summary, topics, q
 
 @st.cache_resource
 def load_whisper():
-    return whisper.load_model("tiny")   # smallest & fastest ~75MB
+    return whisper.load_model("tiny")
 
 @st.cache_resource
 def load_keybert():
-    small_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")  # ~60MB
+    small_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
     return KeyBERT(model=small_model)
 
 # ─────────────────────────────────────────────
@@ -65,7 +66,7 @@ def extract_topics_with_scores(text):
         stop_words="english",
         top_n=10
     )
-    return keywords   # [(word, score), ...]
+    return keywords
 
 @st.cache_data
 def generate_mcqs(text):
@@ -129,26 +130,56 @@ for key, default in {
     "start_quiz":      False,
     "quiz_submitted":  False,
     "user_answers":    [],
+    "active_tab":      0,          # ← NEW: tracks which tab should be visible
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
 # ─────────────────────────────────────────────
 #  QUIZ BUTTON CALLBACKS
-#  on_click updates state BEFORE the rerun,
-#  so Streamlit re-renders in one natural cycle
-#  with no forced st.rerun() — meaning the active
-#  tab never resets and there is zero flash.
 # ─────────────────────────────────────────────
 
 def start_quiz_callback():
-    st.session_state.start_quiz    = True
-    st.session_state.quiz_submitted = False
+    st.session_state.start_quiz     = True
+    st.session_state.quiz_submitted  = False
+    st.session_state.active_tab      = 3   # ← stay on Quiz tab (0-indexed)
 
 def retake_quiz_callback():
-    st.session_state.start_quiz    = False
-    st.session_state.quiz_submitted = False
-    st.session_state.user_answers  = []
+    st.session_state.start_quiz     = False
+    st.session_state.quiz_submitted  = False
+    st.session_state.user_answers    = []
+    st.session_state.active_tab      = 3   # ← stay on Quiz tab
+
+# ─────────────────────────────────────────────
+#  TAB PERSISTENCE HELPER
+#  Injects a tiny JS snippet that re-clicks the
+#  correct tab after every Streamlit rerun.
+#  height=0 keeps it invisible.
+# ─────────────────────────────────────────────
+
+def keep_active_tab(tab_index: int):
+    components.html(
+        f"""
+        <script>
+            (function() {{
+                // Wait for Streamlit to finish rendering the tab bar
+                function clickTab() {{
+                    var tabs = window.parent.document.querySelectorAll(
+                        '[data-baseweb="tab"]'
+                    );
+                    if (tabs && tabs.length > {tab_index}) {{
+                        tabs[{tab_index}].click();
+                    }} else {{
+                        // Tabs not ready yet — retry in 50 ms
+                        setTimeout(clickTab, 50);
+                    }}
+                }}
+                setTimeout(clickTab, 80);
+            }})();
+        </script>
+        """,
+        height=0,
+    )
 
 # ─────────────────────────────────────────────
 #  FILE UPLOAD
@@ -169,9 +200,6 @@ if audio_file is not None:
 
     st.success(f"✅ **{audio_file.name}** uploaded successfully")
 
-    # ── Only process when a NEW file is uploaded ───────────
-    # Every button click causes a Streamlit rerun — without
-    # this guard, Whisper would re-run (~30s) every single time.
     if st.session_state.processed_file != audio_file.name:
 
         with st.spinner("🎙️ Transcribing audio with Whisper… this may take a minute"):
@@ -186,15 +214,15 @@ if audio_file is not None:
         with st.spinner("❓ Generating quiz questions…"):
             st.session_state.mcqs = generate_mcqs(st.session_state.transcript)
 
-        # Reset quiz state for the new file
-        st.session_state.start_quiz    = False
-        st.session_state.quiz_submitted = False
-        st.session_state.user_answers  = []
-        st.session_state.processed_file = audio_file.name
+        # Reset quiz + tab state for new file
+        st.session_state.start_quiz      = False
+        st.session_state.quiz_submitted   = False
+        st.session_state.user_answers     = []
+        st.session_state.processed_file   = audio_file.name
+        st.session_state.active_tab       = 0   # back to Transcript on new upload
 
         st.success("🎉 Processing complete!")
 
-    # Always read from session state — never reprocesses on reruns
     transcript   = st.session_state.transcript
     summary      = st.session_state.summary
     topic_pairs  = st.session_state.topic_pairs
@@ -228,6 +256,10 @@ if audio_file is not None:
         "📊 Analytics"
     ])
 
+    # ── Inject JS to restore the active tab after every rerun ──
+    # Placed immediately after st.tabs() so it fires on every render.
+    keep_active_tab(st.session_state.active_tab)
+
     # ─────────────── TAB 1 : TRANSCRIPT ──────────────────
 
     with tab1:
@@ -236,7 +268,6 @@ if audio_file is not None:
         with st.expander("Show full transcript", expanded=False):
             st.write(transcript)
 
-        # Sentence Length Distribution
         st.subheader("📊 Sentence Length Distribution")
         lengths = [len(s.split()) for s in sentences]
         fig_hist = px.histogram(
@@ -248,7 +279,6 @@ if audio_file is not None:
         fig_hist.update_layout(showlegend=False)
         st.plotly_chart(fig_hist, use_container_width=True)
 
-        # Word Cloud
         st.subheader("🌐 Transcript Word Cloud")
         try:
             wc = WordCloud(
@@ -286,13 +316,11 @@ if audio_file is not None:
         st.subheader("🔑 Detected Lecture Topics")
 
         if topic_words:
-
             topic_df = pd.DataFrame({
                 "Topic":          topic_words,
                 "Confidence (%)": topic_scores
             })
 
-            # Confidence Bar Chart
             fig_bar = px.bar(
                 topic_df,
                 x="Topic", y="Confidence (%)",
@@ -305,7 +333,6 @@ if audio_file is not None:
             fig_bar.update_layout(coloraxis_showscale=False)
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # Radar Chart
             st.subheader("🕸️ Topic Coverage Radar")
             radar_fig = go.Figure(go.Scatterpolar(
                 r=topic_scores + [topic_scores[0]],
@@ -320,7 +347,6 @@ if audio_file is not None:
             )
             st.plotly_chart(radar_fig, use_container_width=True)
 
-            # Topic Table
             st.subheader("📋 Full Topic List")
             st.dataframe(
                 topic_df.sort_values("Confidence (%)", ascending=False),
@@ -332,96 +358,121 @@ if audio_file is not None:
 
     # ─────────────── TAB 4 : QUIZ ────────────────────────
 
-    # ─────────────── TAB 4 : QUIZ ────────────────────────
-
     with tab4:
-    
+
         if not st.session_state.start_quiz:
-    
+
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
             st.button("▶️ Start Quiz", on_click=start_quiz_callback)
-    
+
         elif not st.session_state.quiz_submitted:
-    
-            user_answers = []
-    
-            with st.form("quiz_form"):
-                for i, q in enumerate(mcqs):
-                    st.markdown(f"**Q{i+1}: {q['question']}**")
-    
-                    # ✅ FIX: removed index=None
-                    choice = st.radio(
-                        "Choose your answer:",
-                        q["options"],
-                        key=f"quiz_{i}"
-                    )
-    
-                    user_answers.append(choice)
-                    st.divider()
-    
-                submitted = st.form_submit_button("✅ Submit Quiz")
-    
-            if submitted:
-                # ✅ VALIDATION FIX (prevents multiple clicks issue)
-                if None in user_answers:
-                    st.warning("⚠️ Please answer all questions.")
-                else:
-                    st.session_state.user_answers   = user_answers
-                    st.session_state.quiz_submitted = True
-    
+
+            # ── Collect answers OUTSIDE the form so we always have them ──
+            # Each radio is keyed uniquely; answers persist in session state.
+            st.markdown("### Answer all questions, then click **Submit Quiz**.")
+
+            for i, q in enumerate(mcqs):
+                st.markdown(f"**Q{i+1}: {q['question']}**")
+                st.radio(
+                    "Choose your answer:",
+                    q["options"],
+                    key=f"quiz_ans_{i}",   # persists across reruns automatically
+                    index=None
+                )
+                st.divider()
+
+            # Single submit button — no st.form() wrapper needed.
+            # st.form caused the "multiple clicks" bug because Streamlit
+            # re-evaluates the form state in a separate pass.
+            if st.button("✅ Submit Quiz"):
+                # Gather answers from session state keys
+                st.session_state.user_answers = [
+                    st.session_state.get(f"quiz_ans_{i}") for i in range(len(mcqs))
+                ]
+                st.session_state.quiz_submitted = True
+                st.session_state.active_tab     = 3   # stay on Quiz tab
+                st.rerun()
+
         else:
-    
+
             user_answers = st.session_state.get("user_answers", [])
             score        = 0
             wrong_topics = []
             result_data  = []
-    
+
             for i, q in enumerate(mcqs):
                 given   = user_answers[i] if i < len(user_answers) else None
                 correct = given == q["answer"]
-    
                 if correct:
                     score += 1
                 else:
                     for t in topic_words:
                         if t.lower() in q["question"].lower():
                             wrong_topics.append(t)
-    
+
                 result_data.append({
                     "Question":       f"Q{i+1}",
                     "Status":         "✅ Correct" if correct else "❌ Wrong",
                     "Your Answer":    given or "—",
                     "Correct Answer": q["answer"]
                 })
-    
+
             total      = len(mcqs)
             percentage = round((score / total) * 100, 1) if total else 0
-    
+
             save_results(score, total, topic_words)
-    
+
             st.subheader("🏆 Quiz Results")
-    
+
             r1, r2, r3 = st.columns(3)
-            r1.metric("Score", f"{score} / {total}")
+            r1.metric("Score",      f"{score} / {total}")
             r2.metric("Percentage", f"{percentage}%")
-            r3.metric(
-                "Status",
-                "🌟 Excellent" if percentage >= 80
-                else "👍 Good" if percentage >= 60
-                else "📚 Needs Review"
-            )
-    
+            r3.metric("Status",
+                      "🌟 Excellent"   if percentage >= 80
+                      else "👍 Good"   if percentage >= 60
+                      else "📚 Needs Review")
+
+            gauge_fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=percentage,
+                title={"text": "Understanding Level (%)"},
+                gauge={
+                    "axis": {"range": [0, 100]},
+                    "bar":  {"color": "#2ecc71" if percentage >= 70
+                                      else "#f39c12" if percentage >= 40
+                                      else "#e74c3c"},
+                    "steps": [
+                        {"range": [0,  40], "color": "#ffcccc"},
+                        {"range": [40, 70], "color": "#fff0b3"},
+                        {"range": [70, 100], "color": "#ccffcc"}
+                    ]
+                }
+            ))
+            st.plotly_chart(gauge_fig, use_container_width=True)
+
+            st.subheader("📋 Question-by-Question Breakdown")
             result_df = pd.DataFrame(result_data)
             st.dataframe(result_df, use_container_width=True)
-    
+
+            breakdown_fig = px.bar(
+                result_df, x="Question", color="Status",
+                title="Answer Status per Question",
+                color_discrete_map={
+                    "✅ Correct": "#2ecc71",
+                    "❌ Wrong":   "#e74c3c"
+                }
+            )
+            st.plotly_chart(breakdown_fig, use_container_width=True)
+
             if wrong_topics:
-                st.warning("📚 Topics to Revise:")
-                for t in set(wrong_topics):
-                    st.write(f"🔸 {t}")
+                st.warning("📚 **Topics to Revise:**")
+                for t in list(set(wrong_topics)):
+                    st.write(f"  🔸 {t}")
             else:
-                st.success("🎉 Great job!")
-    
+                st.success("🎉 Great job! You demonstrated good understanding of all topics.")
+
             st.button("🔄 Retake Quiz", on_click=retake_quiz_callback)
+
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
 
     with tab5:
@@ -437,7 +488,6 @@ if audio_file is not None:
                 df = df.sort_values("timestamp").reset_index(drop=True)
                 df["Quiz #"] = df.index + 1
 
-                # Summary Metrics
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Total Quizzes", len(df))
                 m2.metric("Best Score",
@@ -447,7 +497,6 @@ if audio_file is not None:
 
                 st.divider()
 
-                # Score Progress Line Chart
                 st.subheader("📈 Score Progress Over Time")
                 fig_line = px.line(
                     df, x="timestamp", y="score",
@@ -467,7 +516,6 @@ if audio_file is not None:
 
                 st.plotly_chart(fig_line, use_container_width=True)
 
-                # Percentage Trend
                 if "percentage" in df.columns:
                     st.subheader("📉 Understanding % Trend")
                     fig_pct = px.area(
@@ -479,7 +527,6 @@ if audio_file is not None:
                     fig_pct.update_layout(yaxis_range=[0, 100])
                     st.plotly_chart(fig_pct, use_container_width=True)
 
-                # Topic Distribution
                 st.subheader("🥧 Topic Distribution")
                 all_topics = []
                 for t in df["topics"]:
@@ -508,7 +555,6 @@ if audio_file is not None:
                     fig_tbar.update_layout(coloraxis_showscale=False)
                     st.plotly_chart(fig_tbar, use_container_width=True)
 
-                # Raw History Table
                 st.subheader("🗂️ Full Quiz History")
                 cols = (["Quiz #", "timestamp", "score", "percentage"]
                         if "percentage" in df.columns

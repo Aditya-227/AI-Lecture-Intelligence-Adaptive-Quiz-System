@@ -267,15 +267,19 @@ if audio_file is not None:
     TAB_LABELS = ["📄 Transcript", "📝 Summary", "🔍 Topics", "❓ Quiz", "📊 Analytics"]
 
     # Render tab buttons
+    def set_tab(i):
+    st.session_state.active_tab = i
+    
     cols = st.columns(len(TAB_LABELS))
     for i, label in enumerate(TAB_LABELS):
-        if cols[i].button(
+        cols[i].button(
             label,
             key=f"tab_btn_{i}",
             use_container_width=True,
-            type="primary" if st.session_state.active_tab == i else "secondary"
-        ):
-            st.session_state.active_tab = i
+            type="primary" if st.session_state.active_tab == i else "secondary",
+            on_click=set_tab,
+            args=(i,)
+        )
 
     st.divider()
     active = st.session_state.active_tab

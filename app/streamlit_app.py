@@ -161,26 +161,39 @@ def keep_active_tab(tab_index: int):
     components.html(
         f"""
         <script>
-            (function() {{
-                // Wait for Streamlit to finish rendering the tab bar
-                function clickTab() {{
-                    var tabs = window.parent.document.querySelectorAll(
-                        '[data-baseweb="tab"]'
-                    );
-                    if (tabs && tabs.length > {tab_index}) {{
-                        tabs[{tab_index}].click();
-                    }} else {{
-                        // Tabs not ready yet — retry in 50 ms
-                        setTimeout(clickTab, 50);
-                    }}
+        (function() {{
+            var TARGET = {tab_index};
+
+            function clickTab() {{
+                var tabs = window.parent.document.querySelectorAll('[data-baseweb="tab"]');
+                if (tabs.length > TARGET) {{
+                    tabs[TARGET].click();
+                    return true;
                 }}
-                setTimeout(clickTab, 80);
-            }})();
+                return false;
+            }}
+
+            // Try immediately (handles already-rendered tab bar)
+            if (clickTab()) return;
+
+            // Otherwise watch for the tab bar to appear in the DOM
+            var observer = new MutationObserver(function(_, obs) {{
+                if (clickTab()) {{
+                    obs.disconnect();
+                }}
+            }});
+            observer.observe(window.parent.document.body, {{
+                childList: true,
+                subtree: true
+            }});
+
+            // Safety net — disconnect after 3 s to avoid memory leak
+            setTimeout(function() {{ observer.disconnect(); }}, 3000);
+        }})();
         </script>
         """,
         height=0,
     )
-
 # ─────────────────────────────────────────────
 #  FILE UPLOAD
 # ─────────────────────────────────────────────

@@ -40,8 +40,7 @@ def load_keybert():
     return KeyBERT()
 
 # ─────────────────────────────────────────────
-#  CORE FUNCTIONS  (NO cache on transcribe — 
-#  static filename would return stale results)
+#  CORE FUNCTIONS
 # ─────────────────────────────────────────────
 
 def transcribe_audio(path):
@@ -57,7 +56,6 @@ def summarize_text(text):
 
 @st.cache_data
 def extract_topics_with_scores(text):
-    """Returns list of (word, score) tuples so scores can be used in charts."""
     kw_model = load_keybert()
     keywords = kw_model.extract_keywords(
         text,
@@ -130,7 +128,6 @@ audio_file = st.file_uploader(
 
 if audio_file is not None:
 
-    # Use original filename to avoid stale cache hits
     file_path = f"uploaded_{audio_file.name}"
 
     with open(file_path, "wb") as f:
@@ -138,26 +135,43 @@ if audio_file is not None:
 
     st.success(f"✅ **{audio_file.name}** uploaded successfully")
 
-    # ── Processing pipeline with spinners ──────────────────
-    with st.spinner("🎙️ Transcribing audio with Whisper… this may take a minute"):
-        transcript = transcribe_audio(file_path)
+    # ── FIX 1: Only process if this is a new file ──────────
+    # Buttons & tab switches cause Streamlit reruns — without
+    # this check every rerun would re-run Whisper (~30s).
+    if "processed_file" not in st.session_state or st.session_state.processed_file != audio_file.name:
 
-    with st.spinner("📝 Generating lecture summary…"):
-        summary = summarize_text(transcript)
+        with st.spinner("🎙️ Transcribing audio with Whisper… this may take a minute"):
+            st.session_state.transcript = transcribe_audio(file_path)
 
-    with st.spinner("🔍 Extracting key topics…"):
-        topic_pairs  = extract_topics_with_scores(transcript)   # [(word, score)]
-        topic_words  = [w for w, s in topic_pairs]
-        topic_scores = [round(s * 100, 1) for w, s in topic_pairs]
+        with st.spinner("📝 Generating lecture summary…"):
+            st.session_state.summary = summarize_text(st.session_state.transcript)
 
-    with st.spinner("❓ Generating quiz questions…"):
-        mcqs = generate_mcqs(transcript)
+        with st.spinner("🔍 Extracting key topics…"):
+            st.session_state.topic_pairs = extract_topics_with_scores(st.session_state.transcript)
 
-    st.success("🎉 Processing complete!")
+        with st.spinner("❓ Generating quiz questions…"):
+            st.session_state.mcqs = generate_mcqs(st.session_state.transcript)
 
-    # ── Lecture Stats Metric Cards ─────────────────────────
+        # Reset quiz state whenever a new file is uploaded
+        st.session_state.start_quiz    = False
+        st.session_state.quiz_submitted = False
+        st.session_state.user_answers  = []
+        st.session_state.processed_file = audio_file.name
+
+        st.success("🎉 Processing complete!")
+
+    # Always read from session state — never reprocesses on reruns
+    transcript   = st.session_state.transcript
+    summary      = st.session_state.summary
+    topic_pairs  = st.session_state.topic_pairs
+    topic_words  = [w for w, s in topic_pairs]
+    topic_scores = [round(s * 100, 1) for w, s in topic_pairs]
+    mcqs         = st.session_state.mcqs
+
+    # ── Lecture Stats Metric Cards ──────────────────────────
     word_count     = len(transcript.split())
-    sentence_count = len([s for s in re.split(r'(?<=[.!?]) +', transcript) if s])
+    sentences      = [s for s in re.split(r'(?<=[.!?]) +', transcript) if s.strip()]
+    sentence_count = len(sentences)
     reading_time   = max(1, round(word_count / 200))
 
     st.divider()
@@ -185,15 +199,14 @@ if audio_file is not None:
     with tab1:
 
         st.subheader("Full Lecture Transcript")
+
+        # FIX 2: Single render inside expander — no duplicate st.write below
         with st.expander("Show full transcript", expanded=False):
             st.write(transcript)
 
-        st.write(transcript[:1000] + ("…" if len(transcript) > 1000 else ""))
-
-        # -- Sentence Length Distribution --
+        # Sentence Length Distribution
         st.subheader("📊 Sentence Length Distribution")
-        sentences = re.split(r'(?<=[.!?]) +', transcript)
-        lengths = [len(s.split()) for s in sentences if s.strip()]
+        lengths = [len(s.split()) for s in sentences]
 
         fig_hist = px.histogram(
             x=lengths,
@@ -205,7 +218,7 @@ if audio_file is not None:
         fig_hist.update_layout(showlegend=False)
         st.plotly_chart(fig_hist, use_container_width=True)
 
-        # -- Word Cloud --
+        # Word Cloud
         st.subheader("🌐 Transcript Word Cloud")
         try:
             wc = WordCloud(
@@ -233,7 +246,6 @@ if audio_file is not None:
         else:
             st.warning("Summary could not be generated — transcript may be too short.")
 
-        # Key bullet points (first 5 long sentences)
         st.subheader("🔹 Key Points")
         key_sentences = [s for s in sentences if len(s.split()) > 10][:5]
         for i, s in enumerate(key_sentences, 1):
@@ -247,12 +259,12 @@ if audio_file is not None:
 
         if topic_words:
 
-            # -- Confidence Bar Chart --
             topic_df = pd.DataFrame({
                 "Topic": topic_words,
                 "Confidence (%)": topic_scores
             })
 
+            # Confidence Bar Chart
             fig_bar = px.bar(
                 topic_df,
                 x="Topic",
@@ -266,10 +278,10 @@ if audio_file is not None:
             fig_bar.update_layout(coloraxis_showscale=False)
             st.plotly_chart(fig_bar, use_container_width=True)
 
-            # -- Radar / Spider Chart --
+            # Radar Chart
             st.subheader("🕸️ Topic Coverage Radar")
             radar_fig = go.Figure(go.Scatterpolar(
-                r=topic_scores + [topic_scores[0]],       # close the shape
+                r=topic_scores + [topic_scores[0]],
                 theta=topic_words + [topic_words[0]],
                 fill="toself",
                 line_color="royalblue",
@@ -281,7 +293,7 @@ if audio_file is not None:
             )
             st.plotly_chart(radar_fig, use_container_width=True)
 
-            # -- Topic table --
+            # Topic Table
             st.subheader("📋 Full Topic List")
             st.dataframe(
                 topic_df.sort_values("Confidence (%)", ascending=False),
@@ -303,7 +315,7 @@ if audio_file is not None:
         if not st.session_state.start_quiz:
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
             if st.button("▶️ Start Quiz"):
-                st.session_state.start_quiz = True
+                st.session_state.start_quiz    = True
                 st.session_state.quiz_submitted = False
                 st.rerun()
 
@@ -326,19 +338,18 @@ if audio_file is not None:
                     submitted = st.form_submit_button("✅ Submit Quiz")
 
                 if submitted:
-                    # Store answers in session state for display
-                    st.session_state.user_answers = user_answers
+                    st.session_state.user_answers  = user_answers
                     st.session_state.quiz_submitted = True
                     st.rerun()
 
             else:
                 user_answers = st.session_state.get("user_answers", [])
-                score = 0
+                score        = 0
                 wrong_topics = []
-                result_data = []
+                result_data  = []
 
                 for i, q in enumerate(mcqs):
-                    given = user_answers[i] if i < len(user_answers) else None
+                    given   = user_answers[i] if i < len(user_answers) else None
                     correct = given == q["answer"]
                     if correct:
                         score += 1
@@ -348,26 +359,25 @@ if audio_file is not None:
                                 wrong_topics.append(t)
 
                     result_data.append({
-                        "Question": f"Q{i+1}",
-                        "Status": "✅ Correct" if correct else "❌ Wrong",
-                        "Your Answer": given or "—",
+                        "Question":       f"Q{i+1}",
+                        "Status":         "✅ Correct" if correct else "❌ Wrong",
+                        "Your Answer":    given or "—",
                         "Correct Answer": q["answer"]
                     })
 
-                total = len(mcqs)
+                total      = len(mcqs)
                 percentage = round((score / total) * 100, 1) if total else 0
 
                 save_results(score, total, topic_words)
 
                 st.subheader("🏆 Quiz Results")
 
-                # Score metric row
                 r1, r2, r3 = st.columns(3)
                 r1.metric("Score",      f"{score} / {total}")
                 r2.metric("Percentage", f"{percentage}%")
                 r3.metric("Status",
-                          "🌟 Excellent" if percentage >= 80
-                          else "👍 Good" if percentage >= 60
+                          "🌟 Excellent"    if percentage >= 80
+                          else "👍 Good"    if percentage >= 60
                           else "📚 Needs Review")
 
                 # Gauge
@@ -383,18 +393,17 @@ if audio_file is not None:
                         "steps": [
                             {"range": [0,  40], "color": "#ffcccc"},
                             {"range": [40, 70], "color": "#fff0b3"},
-                            {"range": [70, 100],"color": "#ccffcc"}
+                            {"range": [70, 100], "color": "#ccffcc"}
                         ]
                     }
                 ))
                 st.plotly_chart(gauge_fig, use_container_width=True)
 
-                # Per-question breakdown table
+                # Per-question breakdown
                 st.subheader("📋 Question-by-Question Breakdown")
                 result_df = pd.DataFrame(result_data)
                 st.dataframe(result_df, use_container_width=True)
 
-                # Correct vs Wrong bar chart
                 breakdown_fig = px.bar(
                     result_df,
                     x="Question",
@@ -407,7 +416,7 @@ if audio_file is not None:
                 )
                 st.plotly_chart(breakdown_fig, use_container_width=True)
 
-                # Weak topic recommendations
+                # Weak topics
                 if wrong_topics:
                     st.warning("📚 **Topics to Revise:**")
                     for t in list(set(wrong_topics)):
@@ -416,7 +425,7 @@ if audio_file is not None:
                     st.success("🎉 Great job! You demonstrated good understanding of all topics.")
 
                 if st.button("🔄 Retake Quiz"):
-                    st.session_state.start_quiz = False
+                    st.session_state.start_quiz    = False
                     st.session_state.quiz_submitted = False
                     st.rerun()
 
@@ -435,28 +444,25 @@ if audio_file is not None:
                 df = df.sort_values("timestamp").reset_index(drop=True)
                 df["Quiz #"] = df.index + 1
 
-                # ── Summary Metrics ────────────────────────────────
+                # Summary Metrics
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Total Quizzes",  len(df))
-                m2.metric("Best Score",     f"{df['score'].max()} / {df['total'].max() if 'total' in df.columns else '?'}")
-                m3.metric("Average Score",  f"{df['score'].mean():.1f}")
-                m4.metric("Latest Score",   f"{df['score'].iloc[-1]}")
+                m1.metric("Total Quizzes", len(df))
+                m2.metric("Best Score",    f"{df['score'].max()} / {int(df['total'].max()) if 'total' in df.columns else '?'}")
+                m3.metric("Average Score", f"{df['score'].mean():.1f}")
+                m4.metric("Latest Score",  f"{df['score'].iloc[-1]}")
 
                 st.divider()
 
-                # ── Score Progress Line Chart ──────────────────────
+                # Score Progress Line Chart
                 st.subheader("📈 Score Progress Over Time")
                 fig_line = px.line(
-                    df,
-                    x="timestamp",
-                    y="score",
+                    df, x="timestamp", y="score",
                     markers=True,
                     title="Quiz Score Progress",
                     labels={"timestamp": "Date", "score": "Score"}
                 )
                 fig_line.update_traces(line_color="#4C78A8", marker_size=8)
 
-                # Moving average overlay (only if 3+ entries)
                 if len(df) >= 3:
                     df["moving_avg"] = df["score"].rolling(window=3).mean()
                     fig_line.add_trace(go.Scatter(
@@ -469,13 +475,11 @@ if audio_file is not None:
 
                 st.plotly_chart(fig_line, use_container_width=True)
 
-                # ── Percentage Trend ───────────────────────────────
+                # Percentage Trend
                 if "percentage" in df.columns:
                     st.subheader("📉 Understanding % Trend")
                     fig_pct = px.area(
-                        df,
-                        x="timestamp",
-                        y="percentage",
+                        df, x="timestamp", y="percentage",
                         title="Understanding Level Over Time (%)",
                         labels={"percentage": "Score %", "timestamp": "Date"},
                         color_discrete_sequence=["#2ecc71"]
@@ -483,7 +487,7 @@ if audio_file is not None:
                     fig_pct.update_layout(yaxis_range=[0, 100])
                     st.plotly_chart(fig_pct, use_container_width=True)
 
-                # ── Topic Distribution Pie ─────────────────────────
+                # Topic Distribution
                 st.subheader("🥧 Topic Distribution")
                 all_topics = []
                 for t in df["topics"]:
@@ -491,27 +495,20 @@ if audio_file is not None:
                         all_topics.extend(t)
 
                 if all_topics:
-                    topic_counts = (
-                        pd.Series(all_topics)
-                        .value_counts()
-                        .reset_index()
-                    )
+                    topic_counts = pd.Series(all_topics).value_counts().reset_index()
                     topic_counts.columns = ["Topic", "Count"]
 
                     fig_pie = px.pie(
                         topic_counts,
-                        names="Topic",
-                        values="Count",
+                        names="Topic", values="Count",
                         hole=0.4,
-                        title="Most Frequent Lecture Topics Across All Sessions"
+                        title="Most Frequent Topics Across All Sessions"
                     )
                     st.plotly_chart(fig_pie, use_container_width=True)
 
-                    # Topic frequency bar chart
                     fig_tbar = px.bar(
                         topic_counts.head(10),
-                        x="Topic",
-                        y="Count",
+                        x="Topic", y="Count",
                         title="Top 10 Most Encountered Topics",
                         color="Count",
                         color_continuous_scale="Teal"
@@ -519,11 +516,12 @@ if audio_file is not None:
                     fig_tbar.update_layout(coloraxis_showscale=False)
                     st.plotly_chart(fig_tbar, use_container_width=True)
 
-                # ── Raw History Table ──────────────────────────────
+                # Raw History Table
                 st.subheader("🗂️ Full Quiz History")
-                display_df = df[["Quiz #", "timestamp", "score",
-                                  "percentage"] if "percentage" in df.columns
-                                 else ["Quiz #", "timestamp", "score"]].copy()
+                cols = ["Quiz #", "timestamp", "score", "percentage"] \
+                       if "percentage" in df.columns \
+                       else ["Quiz #", "timestamp", "score"]
+                display_df = df[cols].copy()
                 display_df["timestamp"] = display_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
                 st.dataframe(display_df, use_container_width=True)
 

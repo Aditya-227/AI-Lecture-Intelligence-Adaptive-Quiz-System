@@ -334,119 +334,112 @@ if audio_file is not None:
 
     with tab4:
 
+        # --- FORCE TAB PERSISTENCE ---
+        st.session_state.setdefault("active_tab", "quiz")
+    
+        # --- INIT ANSWERS ---
+        if "user_answers" not in st.session_state or len(st.session_state.user_answers) != len(mcqs):
+            st.session_state.user_answers = [None] * len(mcqs)
+    
+        # ───────── START SCREEN ─────────
         if not st.session_state.start_quiz:
-
+    
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
-
-            # on_click updates state BEFORE rerun — single click,
-            # no st.rerun() needed, active tab never resets
-            st.button("▶️ Start Quiz", on_click=start_quiz_callback)
-
+    
+            if st.button("▶️ Start Quiz"):
+                st.session_state.start_quiz = True
+                st.session_state.quiz_submitted = False
+                st.session_state.active_tab = "quiz"
+                st.rerun()
+    
+        # ───────── QUIZ FORM ─────────
         elif not st.session_state.quiz_submitted:
-
-            user_answers = []
+    
             with st.form("quiz_form"):
+    
                 for i, q in enumerate(mcqs):
                     st.markdown(f"**Q{i+1}: {q['question']}**")
-                    choice = st.radio(
+    
+                    selected = st.radio(
                         "Choose your answer:",
                         q["options"],
                         key=f"quiz_{i}",
-                        index=None
+                        index=0 if st.session_state.user_answers[i] is None else q["options"].index(st.session_state.user_answers[i])
                     )
-                    user_answers.append(choice)
+    
+                    st.session_state.user_answers[i] = selected
                     st.divider()
-
+    
                 submitted = st.form_submit_button("✅ Submit Quiz")
-
-            # Form submit already triggers a natural rerun — no st.rerun() needed
+    
             if submitted:
-                st.session_state.user_answers   = user_answers
-                st.session_state.quiz_submitted = True
-
+                # VALIDATION (fix multiple clicks issue)
+                if None in st.session_state.user_answers:
+                    st.warning("⚠️ Answer all questions before submitting.")
+                else:
+                    st.session_state.quiz_submitted = True
+                    st.session_state.active_tab = "quiz"
+                    st.rerun()
+    
+        # ───────── RESULTS ─────────
         else:
-
-            user_answers = st.session_state.get("user_answers", [])
+    
+            user_answers = st.session_state.user_answers
             score        = 0
             wrong_topics = []
             result_data  = []
-
+    
             for i, q in enumerate(mcqs):
-                given   = user_answers[i] if i < len(user_answers) else None
+                given   = user_answers[i]
                 correct = given == q["answer"]
+    
                 if correct:
                     score += 1
                 else:
                     for t in topic_words:
                         if t.lower() in q["question"].lower():
                             wrong_topics.append(t)
-
+    
                 result_data.append({
                     "Question":       f"Q{i+1}",
                     "Status":         "✅ Correct" if correct else "❌ Wrong",
-                    "Your Answer":    given or "—",
+                    "Your Answer":    given,
                     "Correct Answer": q["answer"]
                 })
-
+    
             total      = len(mcqs)
             percentage = round((score / total) * 100, 1) if total else 0
-
+    
             save_results(score, total, topic_words)
-
+    
             st.subheader("🏆 Quiz Results")
-
+    
             r1, r2, r3 = st.columns(3)
-            r1.metric("Score",      f"{score} / {total}")
+            r1.metric("Score", f"{score} / {total}")
             r2.metric("Percentage", f"{percentage}%")
-            r3.metric("Status",
-                      "🌟 Excellent"   if percentage >= 80
-                      else "👍 Good"   if percentage >= 60
-                      else "📚 Needs Review")
-
-            # Gauge
-            gauge_fig = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=percentage,
-                title={"text": "Understanding Level (%)"},
-                gauge={
-                    "axis": {"range": [0, 100]},
-                    "bar":  {"color": "#2ecc71" if percentage >= 70
-                                      else "#f39c12" if percentage >= 40
-                                      else "#e74c3c"},
-                    "steps": [
-                        {"range": [0,  40], "color": "#ffcccc"},
-                        {"range": [40, 70], "color": "#fff0b3"},
-                        {"range": [70, 100], "color": "#ccffcc"}
-                    ]
-                }
-            ))
-            st.plotly_chart(gauge_fig, use_container_width=True)
-
-            # Per-question breakdown
-            st.subheader("📋 Question-by-Question Breakdown")
+            r3.metric(
+                "Status",
+                "🌟 Excellent" if percentage >= 80
+                else "👍 Good" if percentage >= 60
+                else "📚 Needs Review"
+            )
+    
             result_df = pd.DataFrame(result_data)
             st.dataframe(result_df, use_container_width=True)
-
-            breakdown_fig = px.bar(
-                result_df, x="Question", color="Status",
-                title="Answer Status per Question",
-                color_discrete_map={
-                    "✅ Correct": "#2ecc71",
-                    "❌ Wrong":   "#e74c3c"
-                }
-            )
-            st.plotly_chart(breakdown_fig, use_container_width=True)
-
-            # Weak topic recommendations
+    
             if wrong_topics:
-                st.warning("📚 **Topics to Revise:**")
-                for t in list(set(wrong_topics)):
-                    st.write(f"  🔸 {t}")
+                st.warning("📚 Topics to Revise:")
+                for t in set(wrong_topics):
+                    st.write(f"🔸 {t}")
             else:
-                st.success("🎉 Great job! You demonstrated good understanding of all topics.")
-
-            # on_click updates state BEFORE rerun — no tab flash
-            st.button("🔄 Retake Quiz", on_click=retake_quiz_callback)
+                st.success("🎉 Great job!")
+    
+            if st.button("🔄 Retake Quiz"):
+                st.session_state.start_quiz = False
+                st.session_state.quiz_submitted = False
+                st.session_state.user_answers = [None] * len(mcqs)
+                st.session_state.active_tab = "quiz"
+                st.rerun()
 
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
 

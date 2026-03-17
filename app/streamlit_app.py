@@ -218,16 +218,7 @@ if audio_file is not None:
     # st.rerun() always resets Streamlit back to tab 0.
     # This tiny snippet fires 80ms after render and clicks
     # whichever tab index was saved in session_state.
-    components.html(f"""
-    <script>
-        setTimeout(function() {{
-            var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-            if (tabs.length > {st.session_state.active_tab_index}) {{
-                tabs[{st.session_state.active_tab_index}].click();
-            }}
-        }}, 80);
-    </script>
-    """, height=0)
+    
 
     # ─────────────── TAB 1 : TRANSCRIPT ──────────────────
 
@@ -334,17 +325,12 @@ if audio_file is not None:
     with tab4:
 
         if not st.session_state.start_quiz:
-
+    
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
-
-            if st.button("▶️ Start Quiz"):
-                st.session_state.start_quiz      = True
-                st.session_state.quiz_submitted  = False
-                st.session_state.active_tab_index = 3   # stay on Quiz tab
-                st.rerun()
-
+            st.button("▶️ Start Quiz", on_click=start_quiz_callback)  # ← on_click, no st.rerun()
+    
         elif not st.session_state.quiz_submitted:
-
+    
             user_answers = []
             with st.form("quiz_form"):
                 for i, q in enumerate(mcqs):
@@ -357,22 +343,21 @@ if audio_file is not None:
                     )
                     user_answers.append(choice)
                     st.divider()
-
+    
                 submitted = st.form_submit_button("✅ Submit Quiz")
-
+    
             if submitted:
-                st.session_state.user_answers    = user_answers
-                st.session_state.quiz_submitted  = True
-                st.session_state.active_tab_index = 3   # stay on Quiz tab
-                st.rerun()
-
+                st.session_state.user_answers   = user_answers
+                st.session_state.quiz_submitted = True
+                # No st.rerun() — form submit already triggers a natural rerun
+    
         else:
-
+    
             user_answers = st.session_state.get("user_answers", [])
             score        = 0
             wrong_topics = []
             result_data  = []
-
+    
             for i, q in enumerate(mcqs):
                 given   = user_answers[i] if i < len(user_answers) else None
                 correct = given == q["answer"]
@@ -382,30 +367,28 @@ if audio_file is not None:
                     for t in topic_words:
                         if t.lower() in q["question"].lower():
                             wrong_topics.append(t)
-
                 result_data.append({
                     "Question":       f"Q{i+1}",
                     "Status":         "✅ Correct" if correct else "❌ Wrong",
                     "Your Answer":    given or "—",
                     "Correct Answer": q["answer"]
                 })
-
+    
             total      = len(mcqs)
             percentage = round((score / total) * 100, 1) if total else 0
-
+    
             save_results(score, total, topic_words)
-
+    
             st.subheader("🏆 Quiz Results")
-
+    
             r1, r2, r3 = st.columns(3)
             r1.metric("Score",      f"{score} / {total}")
             r2.metric("Percentage", f"{percentage}%")
             r3.metric("Status",
-                      "🌟 Excellent"      if percentage >= 80
-                      else "👍 Good"      if percentage >= 60
+                      "🌟 Excellent"   if percentage >= 80
+                      else "👍 Good"   if percentage >= 60
                       else "📚 Needs Review")
-
-            # Gauge
+    
             gauge_fig = go.Figure(go.Indicator(
                 mode="gauge+number",
                 value=percentage,
@@ -423,36 +406,26 @@ if audio_file is not None:
                 }
             ))
             st.plotly_chart(gauge_fig, use_container_width=True)
-
-            # Per-question breakdown
+    
             st.subheader("📋 Question-by-Question Breakdown")
             result_df = pd.DataFrame(result_data)
             st.dataframe(result_df, use_container_width=True)
-
+    
             breakdown_fig = px.bar(
-                result_df,
-                x="Question", color="Status",
+                result_df, x="Question", color="Status",
                 title="Answer Status per Question",
-                color_discrete_map={
-                    "✅ Correct": "#2ecc71",
-                    "❌ Wrong":   "#e74c3c"
-                }
+                color_discrete_map={"✅ Correct": "#2ecc71", "❌ Wrong": "#e74c3c"}
             )
             st.plotly_chart(breakdown_fig, use_container_width=True)
-
-            # Weak topic recommendations
+    
             if wrong_topics:
                 st.warning("📚 **Topics to Revise:**")
                 for t in list(set(wrong_topics)):
                     st.write(f"  🔸 {t}")
             else:
                 st.success("🎉 Great job! You demonstrated good understanding of all topics.")
-
-            if st.button("🔄 Retake Quiz"):
-                st.session_state.start_quiz      = False
-                st.session_state.quiz_submitted  = False
-                st.session_state.active_tab_index = 3   # stay on Quiz tab
-                st.rerun()
+    
+            st.button("🔄 Retake Quiz", on_click=retake_quiz_callback)  # ← on_click, no st.rerun()
 
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
 

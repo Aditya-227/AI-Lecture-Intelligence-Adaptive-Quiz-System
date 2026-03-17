@@ -260,23 +260,29 @@ if audio_file is not None:
     # ─────────────────────────────────────────────
     #  TABS
     # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+    #  CUSTOM TAB BAR  (no JS, no flicker)
+    # ─────────────────────────────────────────────
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📄 Transcript",
-        "📝 Summary",
-        "🔍 Topics",
-        "❓ Quiz",
-        "📊 Analytics"
-    ])
+    TAB_LABELS = ["📄 Transcript", "📝 Summary", "🔍 Topics", "❓ Quiz", "📊 Analytics"]
 
-    # ── Inject JS to restore the active tab after every rerun ──
-    # Placed immediately after st.tabs() so it fires on every render.
-    keep_active_tab(st.session_state.active_tab)
+    # Render tab buttons
+    cols = st.columns(len(TAB_LABELS))
+    for i, label in enumerate(TAB_LABELS):
+        if cols[i].button(
+            label,
+            key=f"tab_btn_{i}",
+            use_container_width=True,
+            type="primary" if st.session_state.active_tab == i else "secondary"
+        ):
+            st.session_state.active_tab = i
+            st.rerun()
+
+    st.divider()
+    active = st.session_state.active_tab
 
     # ─────────────── TAB 1 : TRANSCRIPT ──────────────────
-
-    with tab1:
-
+    if active == 0:
         st.subheader("Full Lecture Transcript")
         with st.expander("Show full transcript", expanded=False):
             st.write(transcript)
@@ -308,9 +314,7 @@ if audio_file is not None:
             st.warning(f"Word cloud could not be generated: {e}")
 
     # ─────────────── TAB 2 : SUMMARY ─────────────────────
-
-    with tab2:
-
+    elif active == 1:
         st.subheader("📋 Lecture Summary")
         if summary.strip():
             st.info(summary)
@@ -323,9 +327,7 @@ if audio_file is not None:
             st.markdown(f"**{i}.** {s}")
 
     # ─────────────── TAB 3 : TOPICS ──────────────────────
-
-    with tab3:
-
+    elif active == 2:
         st.subheader("🔑 Detected Lecture Topics")
 
         if topic_words:
@@ -365,23 +367,16 @@ if audio_file is not None:
                 topic_df.sort_values("Confidence (%)", ascending=False),
                 use_container_width=True
             )
-
         else:
             st.warning("No topics could be extracted.")
 
     # ─────────────── TAB 4 : QUIZ ────────────────────────
-
-    with tab4:
-
+    elif active == 3:
         if not st.session_state.start_quiz:
-
             st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
             st.button("▶️ Start Quiz", on_click=start_quiz_callback)
 
         elif not st.session_state.quiz_submitted:
-
-            # ── Collect answers OUTSIDE the form so we always have them ──
-            # Each radio is keyed uniquely; answers persist in session state.
             st.markdown("### Answer all questions, then click **Submit Quiz**.")
 
             for i, q in enumerate(mcqs):
@@ -389,25 +384,19 @@ if audio_file is not None:
                 st.radio(
                     "Choose your answer:",
                     q["options"],
-                    key=f"quiz_ans_{i}",   # persists across reruns automatically
+                    key=f"quiz_ans_{i}",
                     index=None
                 )
                 st.divider()
 
-            # Single submit button — no st.form() wrapper needed.
-            # st.form caused the "multiple clicks" bug because Streamlit
-            # re-evaluates the form state in a separate pass.
             if st.button("✅ Submit Quiz"):
-                # Gather answers from session state keys
                 st.session_state.user_answers = [
                     st.session_state.get(f"quiz_ans_{i}") for i in range(len(mcqs))
                 ]
                 st.session_state.quiz_submitted = True
-                st.session_state.active_tab     = 3   # stay on Quiz tab
                 st.rerun()
 
         else:
-
             user_answers = st.session_state.get("user_answers", [])
             score        = 0
             wrong_topics = []
@@ -436,7 +425,6 @@ if audio_file is not None:
             save_results(score, total, topic_words)
 
             st.subheader("🏆 Quiz Results")
-
             r1, r2, r3 = st.columns(3)
             r1.metric("Score",      f"{score} / {total}")
             r2.metric("Percentage", f"{percentage}%")
@@ -487,9 +475,7 @@ if audio_file is not None:
             st.button("🔄 Retake Quiz", on_click=retake_quiz_callback)
 
     # ─────────────── TAB 5 : ANALYTICS ───────────────────
-
-    with tab5:
-
+    elif active == 4:
         st.subheader("📊 Learning Progress Analytics")
 
         file = "outputs/results.json"
@@ -569,15 +555,14 @@ if audio_file is not None:
                     st.plotly_chart(fig_tbar, use_container_width=True)
 
                 st.subheader("🗂️ Full Quiz History")
-                cols = (["Quiz #", "timestamp", "score", "percentage"]
+                cols_show = (["Quiz #", "timestamp", "score", "percentage"]
                         if "percentage" in df.columns
                         else ["Quiz #", "timestamp", "score"])
-                display_df = df[cols].copy()
+                display_df = df[cols_show].copy()
                 display_df["timestamp"] = display_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
                 st.dataframe(display_df, use_container_width=True)
 
             except Exception as e:
                 st.error(f"Error loading analytics: {e}")
-
         else:
             st.info("📭 No analytics data yet. Complete a quiz to start tracking your progress!")

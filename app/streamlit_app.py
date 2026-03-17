@@ -11,10 +11,25 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
 
-st.title("AI Lecture Intelligence System")
+# ─────────────────────────────────────────────
+#  PAGE CONFIG
+# ─────────────────────────────────────────────
 
-# ---------- CACHE MODELS ----------
+st.set_page_config(
+    page_title="AI Lecture Intelligence System",
+    page_icon="🎓",
+    layout="wide"
+)
+
+st.title("🎓 AI Lecture Intelligence System")
+st.caption("Upload a lecture audio file to get transcription, summary, topics, quiz, and analytics.")
+
+# ─────────────────────────────────────────────
+#  CACHE MODELS
+# ─────────────────────────────────────────────
 
 @st.cache_resource
 def load_whisper():
@@ -24,7 +39,11 @@ def load_whisper():
 def load_keybert():
     return KeyBERT()
 
-@st.cache_data
+# ─────────────────────────────────────────────
+#  CORE FUNCTIONS  (NO cache on transcribe — 
+#  static filename would return stale results)
+# ─────────────────────────────────────────────
+
 def transcribe_audio(path):
     model = load_whisper()
     result = model.transcribe(path, fp16=False)
@@ -34,69 +53,54 @@ def transcribe_audio(path):
 def summarize_text(text):
     sentences = re.split(r'(?<=[.!?]) +', text)
     filtered = [s for s in sentences if 60 < len(s) < 200]
-    summary_sentences = filtered[:3]
-    return " ".join(summary_sentences)
+    return " ".join(filtered[:3])
 
 @st.cache_data
-def extract_topics(text):
+def extract_topics_with_scores(text):
+    """Returns list of (word, score) tuples so scores can be used in charts."""
     kw_model = load_keybert()
-
     keywords = kw_model.extract_keywords(
         text,
-        keyphrase_ngram_range=(1,2),
+        keyphrase_ngram_range=(1, 2),
         stop_words="english",
         top_n=10
     )
-
-    return [w for w, s in keywords]
+    return keywords  # [(word, score), ...]
 
 @st.cache_data
 def generate_mcqs(text):
-
     sentences = re.split(r'(?<=[.!?]) +', text)
     filtered = [s for s in sentences if 40 < len(s) < 150]
     selected = filtered[:5]
 
     mcqs = []
-
     for s in selected:
-
         words = re.findall(r'\b[A-Za-z]{5,}\b', s)
-
-        if len(words) == 0:
+        if not words:
             continue
-
         key = random.choice(words[:6])
         question = s.replace(key, "_____")
-
         distractors = ["algorithm", "model", "dataset", "training", "prediction"]
-
         options = random.sample(distractors, 3)
         options.append(key)
-
         random.shuffle(options)
-
-        mcqs.append({
-            "question": question,
-            "options": options,
-            "answer": key
-        })
+        mcqs.append({"question": question, "options": options, "answer": key})
 
     return mcqs
 
+# ─────────────────────────────────────────────
+#  SAVE RESULTS
+# ─────────────────────────────────────────────
 
-# ---------- SAVE RESULTS ----------
-
-def save_results(score, topics):
-
+def save_results(score, total, topics):
     result = {
         "score": score,
+        "total": total,
+        "percentage": round((score / total) * 100, 1) if total else 0,
         "topics": topics,
         "timestamp": str(datetime.now())
     }
-
     file = "outputs/results.json"
-
     os.makedirs("outputs", exist_ok=True)
 
     if not os.path.exists(file):
@@ -106,214 +110,425 @@ def save_results(score, topics):
             with open(file, "r") as f:
                 content = f.read().strip()
                 data = json.loads(content) if content else []
-        except:
+        except Exception:
             data = []
 
     data.append(result)
-
     with open(file, "w") as f:
         json.dump(data, f, indent=2)
 
+# ─────────────────────────────────────────────
+#  FILE UPLOAD
+# ─────────────────────────────────────────────
 
-# ---------- UI ----------
-
-st.header("Upload Lecture Audio")
+st.header("📤 Upload Lecture Audio")
 
 audio_file = st.file_uploader(
-    "Upload lecture audio",
+    "Supported formats: MP3, WAV, M4A",
     type=["mp3", "wav", "m4a"]
 )
 
 if audio_file is not None:
 
-    file_path = "uploaded_lecture.mp3"
+    # Use original filename to avoid stale cache hits
+    file_path = f"uploaded_{audio_file.name}"
 
     with open(file_path, "wb") as f:
         f.write(audio_file.read())
 
-    st.success("Lecture uploaded successfully")
+    st.success(f"✅ **{audio_file.name}** uploaded successfully")
 
-    transcript = transcribe_audio(file_path)
-    summary = summarize_text(transcript)
-    topics = extract_topics(transcript)
-    mcqs = generate_mcqs(transcript)
+    # ── Processing pipeline with spinners ──────────────────
+    with st.spinner("🎙️ Transcribing audio with Whisper… this may take a minute"):
+        transcript = transcribe_audio(file_path)
 
-    # ---------- TABS ----------
+    with st.spinner("📝 Generating lecture summary…"):
+        summary = summarize_text(transcript)
+
+    with st.spinner("🔍 Extracting key topics…"):
+        topic_pairs  = extract_topics_with_scores(transcript)   # [(word, score)]
+        topic_words  = [w for w, s in topic_pairs]
+        topic_scores = [round(s * 100, 1) for w, s in topic_pairs]
+
+    with st.spinner("❓ Generating quiz questions…"):
+        mcqs = generate_mcqs(transcript)
+
+    st.success("🎉 Processing complete!")
+
+    # ── Lecture Stats Metric Cards ─────────────────────────
+    word_count     = len(transcript.split())
+    sentence_count = len([s for s in re.split(r'(?<=[.!?]) +', transcript) if s])
+    reading_time   = max(1, round(word_count / 200))
+
+    st.divider()
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("📝 Total Words",     word_count)
+    col2.metric("📖 Sentences",       sentence_count)
+    col3.metric("⏱️ Est. Read Time",  f"{reading_time} min")
+    col4.metric("🔑 Topics Detected", len(topic_words))
+    st.divider()
+
+    # ─────────────────────────────────────────────
+    #  TABS
+    # ─────────────────────────────────────────────
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Transcript",
-        "Summary",
-        "Topics",
-        "Quiz",
-        "Analytics"
+        "📄 Transcript",
+        "📝 Summary",
+        "🔍 Topics",
+        "❓ Quiz",
+        "📊 Analytics"
     ])
 
-    # ---------- TRANSCRIPT ----------
+    # ─────────────── TAB 1 : TRANSCRIPT ──────────────────
 
     with tab1:
 
-        st.subheader("Lecture Transcript")
-        st.write(transcript[:1000])
+        st.subheader("Full Lecture Transcript")
+        with st.expander("Show full transcript", expanded=False):
+            st.write(transcript)
 
-    # ---------- SUMMARY ----------
+        st.write(transcript[:1000] + ("…" if len(transcript) > 1000 else ""))
+
+        # -- Sentence Length Distribution --
+        st.subheader("📊 Sentence Length Distribution")
+        sentences = re.split(r'(?<=[.!?]) +', transcript)
+        lengths = [len(s.split()) for s in sentences if s.strip()]
+
+        fig_hist = px.histogram(
+            x=lengths,
+            nbins=20,
+            title="Words per Sentence",
+            labels={"x": "Words per Sentence", "y": "Sentence Count"},
+            color_discrete_sequence=["#4C78A8"]
+        )
+        fig_hist.update_layout(showlegend=False)
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+        # -- Word Cloud --
+        st.subheader("🌐 Transcript Word Cloud")
+        try:
+            wc = WordCloud(
+                width=900, height=400,
+                background_color="white",
+                colormap="Blues",
+                max_words=100
+            ).generate(transcript)
+
+            fig_wc, ax = plt.subplots(figsize=(12, 5))
+            ax.imshow(wc, interpolation="bilinear")
+            ax.axis("off")
+            st.pyplot(fig_wc)
+        except Exception as e:
+            st.warning(f"Word cloud could not be generated: {e}")
+
+    # ─────────────── TAB 2 : SUMMARY ─────────────────────
 
     with tab2:
 
-        st.subheader("Lecture Summary")
-        st.write(summary)
+        st.subheader("📋 Lecture Summary")
 
-    # ---------- TOPIC VISUALIZATION ----------
+        if summary.strip():
+            st.info(summary)
+        else:
+            st.warning("Summary could not be generated — transcript may be too short.")
+
+        # Key bullet points (first 5 long sentences)
+        st.subheader("🔹 Key Points")
+        key_sentences = [s for s in sentences if len(s.split()) > 10][:5]
+        for i, s in enumerate(key_sentences, 1):
+            st.markdown(f"**{i}.** {s}")
+
+    # ─────────────── TAB 3 : TOPICS ──────────────────────
 
     with tab3:
 
-        st.subheader("Detected Lecture Topics")
+        st.subheader("🔑 Detected Lecture Topics")
 
-        topic_df = pd.DataFrame({
-            "Topic": topics,
-            "Importance": list(range(len(topics), 0, -1))
-        })
+        if topic_words:
 
-        fig = px.bar(
-            topic_df,
-            x="Topic",
-            y="Importance",
-            text="Importance",
-            title="Lecture Topic Importance"
-        )
+            # -- Confidence Bar Chart --
+            topic_df = pd.DataFrame({
+                "Topic": topic_words,
+                "Confidence (%)": topic_scores
+            })
 
-        fig.update_layout(transition_duration=600)
+            fig_bar = px.bar(
+                topic_df,
+                x="Topic",
+                y="Confidence (%)",
+                text="Confidence (%)",
+                title="Topic Relevance Confidence Scores",
+                color="Confidence (%)",
+                color_continuous_scale="Blues"
+            )
+            fig_bar.update_traces(textposition="outside")
+            fig_bar.update_layout(coloraxis_showscale=False)
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-        st.plotly_chart(fig, use_container_width=True)
+            # -- Radar / Spider Chart --
+            st.subheader("🕸️ Topic Coverage Radar")
+            radar_fig = go.Figure(go.Scatterpolar(
+                r=topic_scores + [topic_scores[0]],       # close the shape
+                theta=topic_words + [topic_words[0]],
+                fill="toself",
+                line_color="royalblue",
+                fillcolor="rgba(65, 105, 225, 0.2)"
+            ))
+            radar_fig.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                title="Topic Coverage Radar Chart"
+            )
+            st.plotly_chart(radar_fig, use_container_width=True)
 
-    # ---------- QUIZ ----------
+            # -- Topic table --
+            st.subheader("📋 Full Topic List")
+            st.dataframe(
+                topic_df.sort_values("Confidence (%)", ascending=False),
+                use_container_width=True
+            )
+
+        else:
+            st.warning("No topics could be extracted.")
+
+    # ─────────────── TAB 4 : QUIZ ────────────────────────
 
     with tab4:
 
         if "start_quiz" not in st.session_state:
             st.session_state.start_quiz = False
+        if "quiz_submitted" not in st.session_state:
+            st.session_state.quiz_submitted = False
 
         if not st.session_state.start_quiz:
-
-            if st.button("Start Quiz"):
+            st.info(f"📋 This quiz has **{len(mcqs)} questions** generated from the lecture.")
+            if st.button("▶️ Start Quiz"):
                 st.session_state.start_quiz = True
+                st.session_state.quiz_submitted = False
                 st.rerun()
 
         else:
+            if not st.session_state.quiz_submitted:
 
-            user_answers = []
+                user_answers = []
+                with st.form("quiz_form"):
+                    for i, q in enumerate(mcqs):
+                        st.markdown(f"**Q{i+1}: {q['question']}**")
+                        choice = st.radio(
+                            "Choose your answer:",
+                            q["options"],
+                            key=f"quiz_{i}",
+                            index=None
+                        )
+                        user_answers.append(choice)
+                        st.divider()
 
-            for i, q in enumerate(mcqs):
+                    submitted = st.form_submit_button("✅ Submit Quiz")
 
-                st.write(f"Q{i+1}: {q['question']}")
+                if submitted:
+                    # Store answers in session state for display
+                    st.session_state.user_answers = user_answers
+                    st.session_state.quiz_submitted = True
+                    st.rerun()
 
-                choice = st.radio(
-                    "Choose answer",
-                    q["options"],
-                    key=f"quiz_{i}"
-                )
-
-                user_answers.append(choice)
-
-            if st.button("Submit Quiz"):
-
+            else:
+                user_answers = st.session_state.get("user_answers", [])
                 score = 0
                 wrong_topics = []
+                result_data = []
 
                 for i, q in enumerate(mcqs):
-
-                    if user_answers[i] == q["answer"]:
+                    given = user_answers[i] if i < len(user_answers) else None
+                    correct = given == q["answer"]
+                    if correct:
                         score += 1
                     else:
-                        for t in topics:
-                            if t in q["question"]:
+                        for t in topic_words:
+                            if t.lower() in q["question"].lower():
                                 wrong_topics.append(t)
 
-                st.subheader("Quiz Result")
+                    result_data.append({
+                        "Question": f"Q{i+1}",
+                        "Status": "✅ Correct" if correct else "❌ Wrong",
+                        "Your Answer": given or "—",
+                        "Correct Answer": q["answer"]
+                    })
 
-                st.write(f"Score: {score} / {len(mcqs)}")
+                total = len(mcqs)
+                percentage = round((score / total) * 100, 1) if total else 0
 
-                save_results(score, topics)
+                save_results(score, total, topic_words)
 
-                # ---------- GAUGE VISUALIZATION ----------
+                st.subheader("🏆 Quiz Results")
 
-                percentage = (score / len(mcqs)) * 100
+                # Score metric row
+                r1, r2, r3 = st.columns(3)
+                r1.metric("Score",      f"{score} / {total}")
+                r2.metric("Percentage", f"{percentage}%")
+                r3.metric("Status",
+                          "🌟 Excellent" if percentage >= 80
+                          else "👍 Good" if percentage >= 60
+                          else "📚 Needs Review")
 
-                fig = go.Figure(go.Indicator(
+                # Gauge
+                gauge_fig = go.Figure(go.Indicator(
                     mode="gauge+number",
                     value=percentage,
-                    title={'text': "Understanding Level"},
+                    title={"text": "Understanding Level (%)"},
                     gauge={
-                        'axis': {'range': [0, 100]},
-                        'steps': [
-                            {'range': [0, 40], 'color': "#ffcccc"},
-                            {'range': [40, 70], 'color': "#fff0b3"},
-                            {'range': [70, 100], 'color': "#ccffcc"}
+                        "axis": {"range": [0, 100]},
+                        "bar":  {"color": "#2ecc71" if percentage >= 70
+                                          else "#f39c12" if percentage >= 40
+                                          else "#e74c3c"},
+                        "steps": [
+                            {"range": [0,  40], "color": "#ffcccc"},
+                            {"range": [40, 70], "color": "#fff0b3"},
+                            {"range": [70, 100],"color": "#ccffcc"}
                         ]
                     }
                 ))
+                st.plotly_chart(gauge_fig, use_container_width=True)
 
-                st.plotly_chart(fig, use_container_width=True)
+                # Per-question breakdown table
+                st.subheader("📋 Question-by-Question Breakdown")
+                result_df = pd.DataFrame(result_data)
+                st.dataframe(result_df, use_container_width=True)
 
+                # Correct vs Wrong bar chart
+                breakdown_fig = px.bar(
+                    result_df,
+                    x="Question",
+                    color="Status",
+                    title="Answer Status per Question",
+                    color_discrete_map={
+                        "✅ Correct": "#2ecc71",
+                        "❌ Wrong":   "#e74c3c"
+                    }
+                )
+                st.plotly_chart(breakdown_fig, use_container_width=True)
+
+                # Weak topic recommendations
                 if wrong_topics:
-
-                    st.warning("You should revise these topics:")
-
-                    weak = list(set(wrong_topics))
-
-                    for t in weak:
-                        st.write("-", t)
-
+                    st.warning("📚 **Topics to Revise:**")
+                    for t in list(set(wrong_topics)):
+                        st.write(f"  🔸 {t}")
                 else:
+                    st.success("🎉 Great job! You demonstrated good understanding of all topics.")
 
-                    st.success("Good understanding of the lecture!")
+                if st.button("🔄 Retake Quiz"):
+                    st.session_state.start_quiz = False
+                    st.session_state.quiz_submitted = False
+                    st.rerun()
 
-    # ---------- ANALYTICS DASHBOARD ----------
+    # ─────────────── TAB 5 : ANALYTICS ───────────────────
 
     with tab5:
 
-        st.subheader("Learning Progress Analytics")
+        st.subheader("📊 Learning Progress Analytics")
 
         file = "outputs/results.json"
 
         if os.path.exists(file):
+            try:
+                df = pd.read_json(file)
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df = df.sort_values("timestamp").reset_index(drop=True)
+                df["Quiz #"] = df.index + 1
 
-            df = pd.read_json(file)
+                # ── Summary Metrics ────────────────────────────────
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Quizzes",  len(df))
+                m2.metric("Best Score",     f"{df['score'].max()} / {df['total'].max() if 'total' in df.columns else '?'}")
+                m3.metric("Average Score",  f"{df['score'].mean():.1f}")
+                m4.metric("Latest Score",   f"{df['score'].iloc[-1]}")
 
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.sort_values("timestamp")
+                st.divider()
 
-            fig = px.line(
-                df,
-                x="timestamp",
-                y="score",
-                markers=True,
-                title="Quiz Score Progress Over Time"
-            )
+                # ── Score Progress Line Chart ──────────────────────
+                st.subheader("📈 Score Progress Over Time")
+                fig_line = px.line(
+                    df,
+                    x="timestamp",
+                    y="score",
+                    markers=True,
+                    title="Quiz Score Progress",
+                    labels={"timestamp": "Date", "score": "Score"}
+                )
+                fig_line.update_traces(line_color="#4C78A8", marker_size=8)
 
-            fig.update_layout(transition_duration=800)
+                # Moving average overlay (only if 3+ entries)
+                if len(df) >= 3:
+                    df["moving_avg"] = df["score"].rolling(window=3).mean()
+                    fig_line.add_trace(go.Scatter(
+                        x=df["timestamp"],
+                        y=df["moving_avg"],
+                        mode="lines",
+                        name="3-Quiz Moving Avg",
+                        line=dict(dash="dash", color="orange", width=2)
+                    ))
 
-            st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig_line, use_container_width=True)
 
-            st.subheader("Topic Distribution")
+                # ── Percentage Trend ───────────────────────────────
+                if "percentage" in df.columns:
+                    st.subheader("📉 Understanding % Trend")
+                    fig_pct = px.area(
+                        df,
+                        x="timestamp",
+                        y="percentage",
+                        title="Understanding Level Over Time (%)",
+                        labels={"percentage": "Score %", "timestamp": "Date"},
+                        color_discrete_sequence=["#2ecc71"]
+                    )
+                    fig_pct.update_layout(yaxis_range=[0, 100])
+                    st.plotly_chart(fig_pct, use_container_width=True)
 
-            all_topics = []
+                # ── Topic Distribution Pie ─────────────────────────
+                st.subheader("🥧 Topic Distribution")
+                all_topics = []
+                for t in df["topics"]:
+                    if isinstance(t, list):
+                        all_topics.extend(t)
 
-            for t in df["topics"]:
-                all_topics.extend(t)
+                if all_topics:
+                    topic_counts = (
+                        pd.Series(all_topics)
+                        .value_counts()
+                        .reset_index()
+                    )
+                    topic_counts.columns = ["Topic", "Count"]
 
-            topic_counts = pd.Series(all_topics).value_counts().reset_index()
-            topic_counts.columns = ["Topic", "Count"]
+                    fig_pie = px.pie(
+                        topic_counts,
+                        names="Topic",
+                        values="Count",
+                        hole=0.4,
+                        title="Most Frequent Lecture Topics Across All Sessions"
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
 
-            fig2 = px.pie(
-                topic_counts,
-                names="Topic",
-                values="Count",
-                hole=0.4,
-                title="Most Frequent Lecture Topics"
-            )
+                    # Topic frequency bar chart
+                    fig_tbar = px.bar(
+                        topic_counts.head(10),
+                        x="Topic",
+                        y="Count",
+                        title="Top 10 Most Encountered Topics",
+                        color="Count",
+                        color_continuous_scale="Teal"
+                    )
+                    fig_tbar.update_layout(coloraxis_showscale=False)
+                    st.plotly_chart(fig_tbar, use_container_width=True)
 
-            st.plotly_chart(fig2, use_container_width=True)
+                # ── Raw History Table ──────────────────────────────
+                st.subheader("🗂️ Full Quiz History")
+                display_df = df[["Quiz #", "timestamp", "score",
+                                  "percentage"] if "percentage" in df.columns
+                                 else ["Quiz #", "timestamp", "score"]].copy()
+                display_df["timestamp"] = display_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+                st.dataframe(display_df, use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error loading analytics: {e}")
 
         else:
-
-            st.info("No analytics available yet. Take a quiz first.")
+            st.info("📭 No analytics data yet. Complete a quiz to start tracking your progress!")

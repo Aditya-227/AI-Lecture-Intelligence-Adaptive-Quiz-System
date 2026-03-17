@@ -276,7 +276,6 @@ if audio_file is not None:
             type="primary" if st.session_state.active_tab == i else "secondary"
         ):
             st.session_state.active_tab = i
-            st.rerun()
 
     st.divider()
     active = st.session_state.active_tab
